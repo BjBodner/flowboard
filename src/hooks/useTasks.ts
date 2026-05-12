@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import useLocalStorage from "./useLocalStorage";
-import type { Task, Priority, Status } from "../types/task";
+import type { Task, Status } from "../types/task";
 
 function useTasks() {
   const [tasks, setTasks] = useLocalStorage<Task[]>("flowboard:tasks", []);

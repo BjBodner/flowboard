@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -10,7 +10,8 @@ import {
 } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import type { Task, Status } from "../types/task";
-import { STATUS_ORDER, PRESET_TAGS } from "../types/task";
+import { STATUS_ORDER, PRESET_TAGS, POINTS_BY_PRIORITY, getCurrentLevel, getNextLevel } from "../types/task";
+import type { GameLevel } from "../types/task";
 import Column from "./Column";
 import TaskModal from "./TaskModal";
 import StageIndicator from "./StageIndicator";
@@ -30,6 +31,41 @@ const MOTIVATIONAL_QUOTES = [
 
 void arrayMove;
 
+const CONFETTI_COLORS = ["#6366f1", "#a855f7", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#f43f5e"];
+
+interface Particle {
+  id: number;
+  tx: string;
+  ty: string;
+  rot: string;
+  color: string;
+  size: number;
+  delay: number;
+}
+
+interface CompletionAnim {
+  points: number;
+  leveledUp: boolean;
+  newLevel?: GameLevel;
+  particles: Particle[];
+}
+
+function generateParticles(): Particle[] {
+  return Array.from({ length: 40 }, (_, i) => {
+    const angle = (i / 40) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    const distance = 130 + Math.random() * 200;
+    return {
+      id: i,
+      tx: `${Math.cos(angle) * distance}px`,
+      ty: `${Math.sin(angle) * distance}px`,
+      rot: `${Math.random() * 720 - 360}deg`,
+      color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+      size: 7 + Math.random() * 9,
+      delay: Math.random() * 0.25,
+    };
+  });
+}
+
 function Board() {
   const { tasks, customTags, createTask, updateTask, deleteTask, moveTask, reorderWithinColumn, addCustomTag } =
     useTasks();
@@ -40,6 +76,47 @@ function Board() {
   const [quickTitle, setQuickTitle] = useState("");
   const [quoteIndex, setQuoteIndex] = useState(() => Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length));
   const [quoteKey, setQuoteKey] = useState(0);
+  const [completionAnim, setCompletionAnim] = useState<CompletionAnim | null>(null);
+
+  const prevDoneIds = useRef<Set<string>>(
+    new Set(tasks.filter((t) => t.status === "done").map((t) => t.id))
+  );
+
+  const totalPoints = useMemo(
+    () => tasks.filter((t) => t.status === "done").reduce((sum, t) => sum + POINTS_BY_PRIORITY[t.priority], 0),
+    [tasks]
+  );
+  const currentLevel = useMemo(() => getCurrentLevel(totalPoints), [totalPoints]);
+  const nextLevel = useMemo(() => getNextLevel(totalPoints), [totalPoints]);
+
+  useEffect(() => {
+    const currentDoneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => t.id));
+    const newlyCompleted = tasks.filter((t) => t.status === "done" && !prevDoneIds.current.has(t.id));
+
+    if (newlyCompleted.length > 0) {
+      const earned = newlyCompleted.reduce((sum, t) => sum + POINTS_BY_PRIORITY[t.priority], 0);
+      const currentTotal = tasks
+        .filter((t) => t.status === "done")
+        .reduce((sum, t) => sum + POINTS_BY_PRIORITY[t.priority], 0);
+      const prevTotal = currentTotal - earned;
+      const prevLvl = getCurrentLevel(prevTotal);
+      const newLvl = getCurrentLevel(currentTotal);
+      const didLevelUp = newLvl.level > prevLvl.level;
+
+      setCompletionAnim({
+        points: earned,
+        leveledUp: didLevelUp,
+        newLevel: didLevelUp ? newLvl : undefined,
+        particles: generateParticles(),
+      });
+
+      const timer = setTimeout(() => setCompletionAnim(null), didLevelUp ? 4000 : 2200);
+      prevDoneIds.current = currentDoneIds;
+      return () => clearTimeout(timer);
+    }
+
+    prevDoneIds.current = currentDoneIds;
+  }, [tasks]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -140,7 +217,12 @@ function Board() {
         </div>
       </header>
 
-      <StageIndicator taskCounts={taskCounts} />
+      <StageIndicator
+        taskCounts={taskCounts}
+        totalPoints={totalPoints}
+        currentLevel={currentLevel}
+        nextLevel={nextLevel}
+      />
 
       {newTaskStatus && (
         <div className="quick-create-bar">
@@ -198,6 +280,36 @@ function Board() {
           onClose={() => setEditingTask(null)}
           onAddTag={addCustomTag}
         />
+      )}
+
+      {completionAnim && (
+        <div className="completion-overlay" onClick={() => setCompletionAnim(null)}>
+          {completionAnim.particles.map((p) => (
+            <div
+              key={p.id}
+              className="confetti-particle"
+              style={{
+                "--tx": p.tx,
+                "--ty": p.ty,
+                "--rot": p.rot,
+                backgroundColor: p.color,
+                width: `${p.size}px`,
+                height: `${p.size * 0.55}px`,
+                animationDelay: `${p.delay}s`,
+              } as React.CSSProperties}
+            />
+          ))}
+          <div className={`points-popup${completionAnim.leveledUp ? " points-popup-levelup" : ""}`}>
+            <div className="points-earned">+{completionAnim.points}</div>
+            <div className="points-label">נקודות! 🎉</div>
+            {completionAnim.leveledUp && completionAnim.newLevel && (
+              <div className="level-up-banner">
+                <span className="level-up-icon">{completionAnim.newLevel.icon}</span>
+                <span>עלית לשלב "{completionAnim.newLevel.name}"!</span>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
